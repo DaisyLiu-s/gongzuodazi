@@ -135,6 +135,9 @@ details summary{cursor:pointer;font-size:12px;color:var(--mut)}
 .todo.open{background:var(--card);border:1px solid var(--line);border-bottom:none;border-radius:10px 10px 0 0;padding-left:8px}
 .todo .tt{cursor:pointer}.todo .tt:hover{color:var(--acc)}
 .note-i{font-size:12px}
+.gbtn{display:inline-flex;align-items:center;gap:8px;font-size:15px;padding:9px 16px}
+.gbtn b{background:#fff;color:#4285f4;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-size:14px}
+.mailbox{margin-top:14px}.mailbox summary{font-size:13px}
 .todo .tt{min-width:0}
 .tdetail .fl{font-size:13px;color:var(--mut);margin-bottom:-4px}
 .tdetail .tip{font-size:12px;margin-top:-2px}
@@ -426,7 +429,9 @@ function vSettings(){
     sync=`<p class="mut sm">在 Firebase 控制台里新建项目并添加一个网页应用，把它给的 firebaseConfig 整段粘贴到这里。（部署到 Firebase Hosting 后会自动读取，不用粘贴。）</p><textarea id="fbcfg" rows="6" placeholder="const firebaseConfig = { apiKey: ..., authDomain: ..., projectId: ... }"></textarea><p><button class="pri" data-act="fbcfg-save">保存并启用</button></p>`;
   }else if(!s.fb){sync=`<p class="mut sm">${esc(s.msg)}</p>${localStorage.getItem(KEY+'.fbcfg')?'<button data-act="fbcfg-clear">清除已保存的配置</button>':''}`}
   else if(!s.user){
-    sync=`<p class="mut sm">登录后，所有设备的数据自动保持一致，手机和电脑都能用。第一次请先“注册”。</p><div class="addrow"><input id="au-mail" type="email" class="t" placeholder="邮箱" autocomplete="username"><input id="au-pw" type="password" class="t" placeholder="密码（至少 6 位）" autocomplete="current-password"></div><button class="pri" data-act="auth-login">登录</button> <button data-act="auth-signup">注册</button>`;
+    sync=`<p class="mut sm">登录后，所有设备的数据自动保持一致，手机和电脑都能用。每台设备用同一个账号登录。</p>
+    <button class="pri gbtn" data-act="auth-google"><b>G</b> 用 Google 账号登录</button>
+    <details class="mailbox"><summary>用邮箱和密码登录（备用）</summary><div class="addrow"><input id="au-mail" type="email" class="t" placeholder="邮箱" autocomplete="username"><input id="au-pw" type="password" class="t" placeholder="密码（至少 6 位）" autocomplete="current-password"></div><button data-act="auth-login">登录</button> <button data-act="auth-signup">注册</button></details>`;
   }else{
     sync=`<p>已登录：<b>${esc(s.user.email)}</b></p><p class="mut sm" id="syncMsg">状态：${esc(s.msg)}</p><button data-act="sync-now">立即同步</button> <button data-act="auth-logout">退出登录</button>`;
   }
@@ -578,6 +583,10 @@ const ACTIONS={
     const m=db.meta;db=fresh();db.meta.lastBackup=m.lastBackup;save();ui.view='today';render();toast('已全部清空')},
   'fbcfg-save'(){const cfg=parseCfg($('#fbcfg').value);if(!cfg||!cfg.apiKey||!cfg.projectId)return toast('没读懂这段配置，请把 firebaseConfig 整段复制过来');localStorage.setItem(KEY+'.fbcfg',JSON.stringify(cfg));location.reload()},
   'fbcfg-clear'(){localStorage.removeItem(KEY+'.fbcfg');location.reload()},
+  async 'auth-google'(){const {Au,auth}=SYNC.fb;const pv=new Au.GoogleAuthProvider();pv.setCustomParameters({prompt:'select_account'});
+    try{await Au.signInWithPopup(auth,pv);toast('登录成功')}
+    catch(e){if(['auth/popup-blocked','auth/operation-not-supported-in-this-environment','auth/web-storage-unsupported'].includes(e.code)){try{await Au.signInWithRedirect(auth,pv)}catch(x){toast(authErr(x))}}
+      else if(e.code!=='auth/popup-closed-by-user'&&e.code!=='auth/cancelled-popup-request')toast(authErr(e))}},
   async 'auth-login'(){const {Au,auth}=SYNC.fb;try{await Au.signInWithEmailAndPassword(auth,$('#au-mail').value.trim(),$('#au-pw').value);toast('登录成功')}catch(e){toast(authErr(e))}},
   async 'auth-signup'(){const {Au,auth}=SYNC.fb;try{await Au.createUserWithEmailAndPassword(auth,$('#au-mail').value.trim(),$('#au-pw').value);toast('注册并登录成功')}catch(e){toast(authErr(e))}},
   async 'auth-logout'(){await SYNC.fb.Au.signOut(SYNC.fb.auth)},
@@ -600,7 +609,7 @@ const CHG={
       if(m.aStart&&m.aEnd&&m.aEnd<m.aStart){if(k==='aStart')m.aEnd=m.aStart;else m.aStart=m.aEnd}save();laterRender();return}
     if(!el.value)return;m[k]=el.value;if(m.end<m.start){if(k==='start')m.end=m.start;else m.start=m.end}save();laterRender()}
 };
-const authErr=e=>({'auth/invalid-credential':'邮箱或密码不对','auth/invalid-email':'邮箱格式不对','auth/weak-password':'密码太短（至少 6 位）','auth/email-already-in-use':'这个邮箱已经注册过了，直接登录','auth/operation-not-allowed':'还没在 Firebase 里开启邮箱登录','auth/network-request-failed':'网络不通','auth/too-many-requests':'试太多次了，稍后再试'}[e.code]||('出错：'+(e.code||e.message)));
+const authErr=e=>({'auth/invalid-credential':'邮箱或密码不对','auth/invalid-email':'邮箱格式不对','auth/weak-password':'密码太短（至少 6 位）','auth/email-already-in-use':'这个邮箱已经注册过了，直接登录','auth/operation-not-allowed':'还没在 Firebase 里开启这种登录方式','auth/unauthorized-domain':'这个网址还没加到 Firebase 的「已获授权的网域」','auth/account-exists-with-different-credential':'这个邮箱已经用别的方式注册过了，请用原来的方式登录','auth/popup-closed-by-user':'登录窗口被关掉了','auth/network-request-failed':'网络不通','auth/too-many-requests':'试太多次了，稍后再试'}[e.code]||('出错：'+(e.code||e.message)));
 
 document.addEventListener('click',ev=>{const el=ev.target.closest('[data-act]');if(!el)return;const f=ACTIONS[el.dataset.act];if(f)f(el,ev)});
 /* 日期框：等输入完、离开输入框时才保存，避免年份只打了两位就被存成 0020 年 */
@@ -680,6 +689,7 @@ async function syncInit(){
     const app=A.initializeApp(cfg);let fs;
     try{fs=F.initializeFirestore(app,{localCache:F.persistentLocalCache({tabManager:F.persistentMultipleTabManager()})})}catch(e){fs=F.getFirestore(app)}
     const auth=Au.getAuth(app);SYNC.fb={A,F,Au,app,fs,auth};
+    Au.getRedirectResult(auth).then(r=>{if(r&&r.user)toast('登录成功')}).catch(e=>toast(authErr(e)));
     Au.onAuthStateChanged(auth,u=>{SYNC.user=u;if(u)startSync();else{stopSync();setSync('off','未登录');if(ui.view==='settings')softRender()}});
   }catch(e){SYNC.fb=null;setSync('err','云同步加载失败（网络？）');}
 }

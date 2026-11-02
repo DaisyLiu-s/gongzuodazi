@@ -7,7 +7,7 @@
 - 数据和登录：Firebase（Firestore + Authentication，项目 `gongzuodazi`）
 
 ## Firebase 控制台需要设置的
-1. Authentication → 登录方法 → 启用「电子邮件/密码」
+1. Authentication → 登录方法 → 启用「Google」（以及备用的「电子邮件/密码」）
 2. Authentication → 设置 → 已获授权的网域 → 添加 `daisyliu-s.github.io`
 3. Firestore → 规则 → 粘贴 `firestore.rules` 的内容 → 发布
 
