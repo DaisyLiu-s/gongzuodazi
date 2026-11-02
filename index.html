@@ -27,6 +27,8 @@ nav{position:sticky;top:0;height:100vh;padding:18px 12px;border-right:1px solid 
 .syncb{margin-top:auto;font-size:12px;color:var(--mut);padding:8px 10px;cursor:pointer;border-radius:9px}
 .syncb:hover{background:var(--acc2)}
 .syncb.ok{color:var(--ok)}.syncb.err{color:var(--warn)}
+.syncmini{display:none;margin-left:auto;font-size:12px;color:var(--mut);cursor:pointer;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.syncmini.ok{color:var(--ok)}.syncmini.err{color:var(--warn)}
 main{padding:0 22px 60px;max-width:980px;width:100%;min-width:0}
 .cap{position:sticky;top:0;z-index:5;background:var(--bg);padding:14px 0 10px;border-bottom:1px solid var(--line)}
 #capText{width:100%;font-size:16px;padding:11px 14px}
@@ -168,6 +170,7 @@ textarea.mono,.pathrow code{font-family:ui-monospace,Consolas,"Cascadia Mono",mo
  .shell{grid-template-columns:1fr}
  nav{position:fixed;bottom:0;left:0;right:0;top:auto;height:auto;flex-direction:row;border-right:none;border-top:1px solid var(--line);background:var(--bg);z-index:20;padding:6px 4px calc(6px + env(safe-area-inset-bottom));gap:0;justify-content:space-around}
  .brand,.syncb{display:none}
+ .syncmini{display:inline}
  .ni{flex-direction:column;gap:0;padding:4px 6px;font-size:11px;position:relative;align-items:center}
  .ni em{position:absolute;top:0;right:0;margin:0;font-size:10px;padding:0 5px}
  main{padding:0 14px 90px}
@@ -185,6 +188,7 @@ textarea.mono,.pathrow code{font-family:ui-monospace,Consolas,"Cascadia Mono",mo
       <div class="caprow">
         <select id="capProj"></select>
         <label class="chk"><input type="checkbox" id="capAnom"> ⚠ 异常</label>
+        <span id="syncMini" class="syncmini" data-act="nav" data-id="settings"></span>
         <button class="pri" data-act="cap-log">记录</button>
         <button data-act="cap-todo">→ 明天待办</button>
         <button data-act="cap-idea">💡 停车场</button>
@@ -630,7 +634,8 @@ document.addEventListener('focusout',ev=>{const el=ev.target;if(el.type!=='date'
 function pickSearch(el){ui.pickQ=el.value;clearTimeout(ui.pt);ui.pt=setTimeout(()=>{render();const i=document.querySelector('.pq');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length)}},300)}
 document.addEventListener('compositionend',ev=>{if(ev.target.dataset&&ev.target.dataset.inp==='pickQ')pickSearch(ev.target)});
 function flushTodo(){document.querySelectorAll('.tdetail textarea[data-chg=todo]').forEach(ta=>CHG.todo(ta,true))}
-document.addEventListener('input',ev=>{const el=ev.target;if(el.dataset&&el.dataset.inp==='pickQ'){if(!ev.isComposing)pickSearch(el);return}if(el.dataset&&el.dataset.chg==='todo'&&['notes','paths'].includes(el.dataset.k)){clearTimeout(ui.nt);ui.nt=setTimeout(()=>CHG.todo(el,true),600)}});
+document.addEventListener('input',ev=>{const el=ev.target;if(el.dataset&&el.dataset.inp==='pickQ'){if(!ev.isComposing)pickSearch(el);return}if(el.dataset&&el.dataset.chg==='todo'&&['notes','paths'].includes(el.dataset.k)){clearTimeout(ui.nt);ui.nt=setTimeout(()=>CHG.todo(el,true),600)}
+  else if(el.dataset&&el.dataset.chg==='resume'){clearTimeout(ui.rt);ui.rt=setTimeout(()=>CHG.resume(el),600)}});
 document.addEventListener('keydown',ev=>{
   if(ev.key!=='Enter'||ev.shiftKey||ev.isComposing||ev.keyCode===229)return;
   if(ev.target.type==='date'){ev.target.blur();return}
@@ -672,7 +677,8 @@ function removeDemo(){const ids=demoIds();let n=0;for(const c of COLLS){const k=
 
 /* ============ Firebase 云同步（可选） ============ */
 const SYNC={state:'off',msg:'本地模式',fb:null,user:null,last:{},timer:null,unsub:null,ready:false,autoCfg:false};
-function setSync(state,msg){SYNC.state=state;SYNC.msg=msg;renderNav();const m=$('#syncMsg');if(m)m.textContent='状态：'+msg}
+function setSync(state,msg){SYNC.state=state;SYNC.msg=msg;renderNav();const m=$('#syncMsg');if(m)m.textContent='状态：'+msg;
+  const mi=$('#syncMini');if(mi){mi.textContent=state==='off'&&!SYNC.fb?'':'☁ '+msg;mi.className='syncmini '+state}}
 function parseCfg(str){try{const a=str.indexOf('{'),b=str.lastIndexOf('}');if(a<0||b<a)return null;
   let s=str.slice(a,b+1).replace(/\/\/.*$/gm,'').replace(/([{,]\s*)([A-Za-z_]\w*)\s*:/g,'$1"$2":').replace(/'/g,'"').replace(/,\s*}/g,'}');return JSON.parse(s)}catch(e){return null}}
 const itemMap=()=>{const m={};for(const c of COLLS)for(const it of db[c])m[c+'__'+it.id]=JSON.stringify(it);return m};
@@ -693,40 +699,67 @@ async function syncInit(){
     Au.onAuthStateChanged(auth,u=>{SYNC.user=u;if(u)startSync();else{stopSync();setSync('off','未登录');if(ui.view==='settings')softRender()}});
   }catch(e){SYNC.fb=null;setSync('err','云同步加载失败（网络？）');}
 }
-function stopSync(){if(SYNC.unsub){SYNC.unsub();SYNC.unsub=null}SYNC.ready=false;SYNC.last={}}
+/* 同步规则：
+   - 本地有改动 → 停顿约 1 秒后自动上传（打字过程中不上传，输入框失去焦点或停顿后才保存）
+   - 云端有改动 → 实时下载；如果你正在某个输入框里打字，页面等你打完再刷新
+   - 记住“上次已同步的内容”，所以在别的设备删掉的东西，这台设备打开时也会删掉，不会被传回去 */
+const hash=str=>{let h1=0xdeadbeef,h2=0x41c6ce57;for(let i=0;i<str.length;i++){const c=str.charCodeAt(i);h1=Math.imul(h1^c,2654435761);h2=Math.imul(h2^c,1597334677)}
+  h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);return (h2>>>0).toString(36)+(h1>>>0).toString(36)};
+const lastKey=()=>KEY+'.synced.'+SYNC.user.uid;
+function loadLast(){try{return JSON.parse(localStorage.getItem(lastKey())||'{}')}catch(e){return {}}}
+function saveLast(){try{localStorage.setItem(lastKey(),JSON.stringify(SYNC.last))}catch(e){}}
+function stopSync(){if(SYNC.unsub){SYNC.unsub();SYNC.unsub=null}clearTimeout(SYNC.timer);SYNC.ready=false;SYNC.last={}}
 function startSync(){
   const {F,fs}=SYNC.fb;stopSync();setSync('busy','同步中…');
+  const prev=loadLast();SYNC.last={};
   const col=F.collection(fs,'users',SYNC.user.uid,'items');
-  SYNC.unsub=F.onSnapshot(col,snap=>{
+  SYNC.unsub=F.onSnapshot(col,{includeMetadataChanges:true},snap=>{
     let changed=false;
     snap.docChanges().forEach(ch=>{
       if(ch.doc.metadata.hasPendingWrites)return;
       const k=ch.doc.id,i=k.indexOf('__'),c=k.slice(0,i),id=k.slice(i+2);if(!COLLS.includes(c))return;
       if(ch.type==='removed'){const n=db[c].length;db[c]=db[c].filter(x=>x.id!==id);delete SYNC.last[k];if(db[c].length!==n)changed=true}
-      else{const j=ch.doc.data().j;SYNC.last[k]=j;const it=JSON.parse(j),ix=db[c].findIndex(x=>x.id===id);
-        if(ix<0){db[c].push(it);changed=true}else if(JSON.stringify(db[c][ix])!==j){db[c][ix]=it;changed=true}}
+      else{const j=ch.doc.data().j;SYNC.last[k]=hash(j);const ix=db[c].findIndex(x=>x.id===id);
+        if(ix<0){db[c].push(JSON.parse(j));changed=true}else if(JSON.stringify(db[c][ix])!==j){db[c][ix]=JSON.parse(j);changed=true}}
     });
-    SYNC.ready=true;
+    if(!SYNC.ready){
+      if(snap.metadata.fromCache){setSync('busy','连接中…（离线时先用本地数据）');if(changed){saveLocal();softRender()}return}
+      // 第一次拿到服务器数据：以前同步过、但云端已经没有的 → 说明在别处删掉了，这里也删
+      const remote=new Set(snap.docs.map(d=>d.id));
+      for(const k in prev){if(remote.has(k))continue;const i=k.indexOf('__'),c=k.slice(0,i),id=k.slice(i+2);
+        if(!COLLS.includes(c))continue;const n=db[c].length;db[c]=db[c].filter(x=>x.id!==id);if(db[c].length!==n)changed=true}
+      SYNC.ready=true;
+    }
+    saveLast();
     if(changed){saveLocal();softRender()}
     schedulePush();
-    setSync('ok',snap.metadata.fromCache?'离线（本地缓存）':'已同步');
+    SYNC.fromCache=snap.metadata.fromCache;
+    setSync(SYNC.fromCache?'busy':'ok',SYNC.fromCache?'离线（改动会在联网后上传）':'已同步');
     if(ui.view==='settings'&&!changed)softRender();
   },err=>setSync('err','同步出错：'+(err.code||err.message)));
 }
-function schedulePush(){if(!SYNC.fb||!SYNC.user||!SYNC.ready)return;clearTimeout(SYNC.timer);SYNC.timer=setTimeout(pushNow,700)}
+function schedulePush(){if(!SYNC.fb||!SYNC.user||!SYNC.ready)return;clearTimeout(SYNC.timer);SYNC.timer=setTimeout(pushNow,900)}
 function pushNow(){
+  SYNC.timer=null;if(!SYNC.ready)return;
   const {F,fs}=SYNC.fb;const cur=itemMap(),ops=[];
-  for(const k in cur)if(SYNC.last[k]!==cur[k])ops.push(['set',k,cur[k]]);
+  for(const k in cur){const h=hash(cur[k]);if(SYNC.last[k]!==h)ops.push(['set',k,cur[k],h])}
   for(const k in SYNC.last)if(!(k in cur))ops.push(['del',k]);
   if(!ops.length)return;
-  setSync('busy','同步中…');
+  setSync('busy','上传中…');const off=SYNC.fromCache||!navigator.onLine;
+  const jobs=[];
   for(let i=0;i<ops.length;i+=400){
     const b=F.writeBatch(fs);
     ops.slice(i,i+400).forEach(o=>{const ref=F.doc(fs,'users',SYNC.user.uid,'items',o[1]);if(o[0]==='set')b.set(ref,{c:o[1].split('__')[0],j:o[2],t:Date.now()});else b.delete(ref)});
-    b.commit().then(()=>setSync('ok','已同步')).catch(e=>setSync('err','上传失败：'+(e.code||e.message)));
+    jobs.push(b.commit());
   }
-  ops.forEach(o=>{if(o[0]==='set')SYNC.last[o[1]]=o[2];else delete SYNC.last[o[1]]});
+  ops.forEach(o=>{if(o[0]==='set')SYNC.last[o[1]]=o[3];else delete SYNC.last[o[1]]});saveLast();
+  Promise.all(jobs).then(()=>setSync('ok','已同步')).catch(e=>setSync('err','上传失败：'+(e.code||e.message)));
+  if(off)setSync('busy','离线（改动会在联网后上传）');
 }
+/* 切到后台 / 关闭页面前：把还没保存的输入和还没上传的改动立刻处理掉 */
+function flushAll(){flushTodo();document.querySelectorAll('textarea[data-chg=resume]').forEach(el=>CHG.resume(el));if(SYNC.timer){clearTimeout(SYNC.timer);pushNow()}}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)flushAll()});
+window.addEventListener('pagehide',flushAll);
 
 /* ============ 启动 ============ */
 render();
